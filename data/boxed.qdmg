@@ -1,10 +1,9 @@
 GlobalSettings {
-	frameWidth          640
-	frameHeight         480
+	frameWidth          1024
+	frameHeight         768
 	ambientLight        (0.075, 0.075, 0.075)
 	maxTraceDepth 8
-	lightPos (50, 50, -20)
-	lightIntensity 2048
+	wantAA false
 }
 
 Camera camera {
@@ -18,7 +17,7 @@ Camera camera {
 
 //////////////////////// LIGHTS ////////////////////////////////////////////
 
-/*
+
 RectLight l2 {
 	xSubd 4
 	ySubd 4
@@ -38,7 +37,7 @@ RectLight l_small {
 	xSubd  4
 	ySubd  4
 }
-*/
+
 
 //////////////////////// GEOMETRIES ////////////////////////////////////////
 
@@ -69,8 +68,8 @@ BumpTexture diceBump {
 //////////////////////// TEXTURES & SHADERS  ///////////////////////////////
 
 CheckerTexture checker {
-	color1   (0.50, 0.77, 0.77)
-	color2   (0.20, 0.20, 0.20)
+	color1   (0.55, 0.55, 0.12)
+	color2   (0.12, 0.12, 0.12)
 	scaling  0.75
 }
 

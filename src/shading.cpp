@@ -24,6 +24,8 @@
 #include <string.h>
 #include "shading.h"
 #include "bitmap.h"
+#include "lights.h"
+#include "random_generator.h"
 
 bool visibilityCheck(const Vector& start, const Vector& end);
 
@@ -36,14 +38,14 @@ Color CheckerTexture::sample(const IntersectionInfo& info)
 	return checkerColor;
 }
 
-double getLightContrib(const IntersectionInfo& info)
+Color getLightContrib(const IntersectionInfo& info, const Vector& lightPos, const Color& lightColor)
 {
-	double distanceToLightSqr = (info.ip - scene.settings.lightPos).lengthSqr();
+	double distanceToLightSqr = (info.ip - lightPos).lengthSqr();
 
-	if (!visibilityCheck(info.ip + info.normal * 1e-6, scene.settings.lightPos)) {
-		return 0;
+	if (!visibilityCheck(info.ip + info.normal * 1e-6, lightPos)) {
+		return Color(0, 0, 0);
 	} else {
-		return scene.settings.lightIntensity / distanceToLightSqr;
+		return lightColor / distanceToLightSqr;
 	}
 }
 
@@ -51,38 +53,64 @@ Color Lambert::shade(const Ray& ray, const IntersectionInfo& info)
 {
 	Color diffuse = texture ? texture->sample(info) : this->color;
 	
-	Vector v2 = info.ip - scene.settings.lightPos; // from light towards the intersection point
-	Vector v1 = faceforward(ray.dir, info.normal); // orient so that surface points to the light
-	v2.normalize();
-	double lambertCoeff = dot(v1, -v2);
-	
-	return scene.settings.ambientLight * diffuse
-		+ diffuse * lambertCoeff * getLightContrib(info);
+	Color result(0, 0, 0);
+	for (auto& light: scene.lights) {
+		int N = light->getNumSamples();
+		Color sum (0, 0, 0);
+		for (int i = 0; i < N; i++) {
+			Vector lightPos;
+			Color lightColor;
+			light->getNthSample(i, info.ip, lightPos, lightColor);
+			Vector v2 = info.ip - lightPos; // from light towards the intersection point
+			Vector v1 = faceforward(ray.dir, info.normal); // orient so that surface points to the light
+			v2.normalize();
+			double lambertCoeff = dot(v1, -v2);
+			sum += diffuse * lambertCoeff * getLightContrib(info, lightPos, lightColor);
+		}
+		result += sum / N;
+	}
+	result += scene.settings.ambientLight * diffuse;
+	return result;
 	
 }
 
 Color Phong::shade(const Ray& ray, const IntersectionInfo& info)
 {
+	
 	Color diffuse = texture ? texture->sample(info) : this->color;
 	
-	Vector v2 = info.ip - scene.settings.lightPos; // from light towards the intersection point
-	Vector v1 = faceforward(ray.dir, info.normal); // orient so that surface points to the light
-	v2.normalize();
-	double lambertCoeff = dot(v1, -v2);
-	double fromLight = getLightContrib(info);
+	Color result(0, 0, 0);
+	for (auto& light: scene.lights) {
+		int N = light->getNumSamples();
+		Color sum (0, 0, 0);
+		for (int i = 0; i < N; i++) {
+			Vector lightPos;
+			Color lightColor;
+			light->getNthSample(i, info.ip, lightPos, lightColor);
+			Vector v2 = info.ip - lightPos; // from light towards the intersection point
+			Vector v1 = faceforward(ray.dir, info.normal); // orient so that surface points to the light
+			v2.normalize();
+			double lambertCoeff = dot(v1, -v2);
+			Color fromLight = getLightContrib(info, lightPos, lightColor);
+
+			Vector r = reflect(v2, v1);
+			Vector toCamera = -ray.dir;
+			double cosGamma = dot(toCamera, r);
+			double phongCoeff;
+			if (cosGamma > 0)
+				phongCoeff = pow(cosGamma, specularExponent);
+			else
+				phongCoeff = 0;
+			
+			sum += diffuse * lambertCoeff * fromLight
+				  + (phongCoeff * specularMultiplier * fromLight);
+
+		}
+		result += sum / N;
+	}
+	result += scene.settings.ambientLight * diffuse;
+	return result;
 	
-	Vector r = reflect(v2, v1);
-	Vector toCamera = -ray.dir;
-	double cosGamma = dot(toCamera, r);
-	double phongCoeff;
-	if (cosGamma > 0)
-		phongCoeff = pow(cosGamma, specularExponent);
-	else
-		phongCoeff = 0;
-	
-	return scene.settings.ambientLight * diffuse
-		+ diffuse * lambertCoeff * fromLight
-		+ Color(1, 1, 1) * (phongCoeff * specularMultiplier * fromLight);
 }
 
 
@@ -96,16 +124,17 @@ BitmapTexture::~BitmapTexture() { delete bitmap; }
 
 Color BitmapTexture::sample(const IntersectionInfo& info)
 {
-	int x = (int) floor(info.u * scaling * bitmap->getWidth());
-	int y = (int) floor(info.v * scaling * bitmap->getHeight());
-	// 0 <= x < bitmap.width
-	// 0 <= y < bitmap.height
-	x = (x % bitmap->getWidth());
-	y = (y % bitmap->getHeight());
+	float x = fmod(info.u * scaling * bitmap->getWidth(), bitmap->getWidth());
+	float y = fmod(info.v * scaling * bitmap->getHeight(), bitmap->getHeight());
 	if (x < 0) x += bitmap->getWidth();
 	if (y < 0) y += bitmap->getHeight();
 	
-	return bitmap->getPixel(x, y);
+	// 0 <= x < bitmap.width
+	// 0 <= y < bitmap.height
+	if (x < 0) x += bitmap->getWidth();
+	if (y < 0) y += bitmap->getHeight();
+	
+	return bitmap->getFilteredPixel(x, y);
 }
 
 extern Color raytrace(Ray ray);
@@ -122,6 +151,7 @@ Color Refl::shade(const Ray& ray, const IntersectionInfo& info)
 		
 		return raytrace(newRay) * multiplier;
 	} else {
+		Random& rnd = getRandomGen();
 		Color result(0, 0, 0);
 		int count = numSamples;
 		if (ray.depth > 0)
@@ -129,14 +159,13 @@ Color Refl::shade(const Ray& ray, const IntersectionInfo& info)
 		for (int i = 0; i < count; i++) {
 			Vector a, b;
 			orthonormalSystem(n, a, b);
-			double angle = randomFloat() * 2 * PI;
-			double radius = randomFloat() * 1;
-			double x, y;
-			x = cos(angle) * radius;
-			y = sin(angle) * radius;
+			double x, y, scaling;
+			
+			rnd.unitDiscSample(x, y);
 			//
-			x *= tan((1 - glossiness) * PI/2);
-			y *= tan((1 - glossiness) * PI/2);
+			scaling = tan((1 - glossiness) * PI/2);
+			x *= scaling;
+			y *= scaling;
 			
 			Vector modifiedNormal = n + a * x + b * y;
 
@@ -171,7 +200,7 @@ Color Refr::shade(const Ray& ray, const IntersectionInfo& info)
 		// leaving the geometry
 		refr = refract(ray.dir, -info.normal, ior);
 	}
-	if (refr.lengthSqr() == 0) return Color(1, 0, 0);
+	if (refr.lengthSqr() == 0) return Color(0, 0, 0);
 	Ray newRay = ray;
 	newRay.start = info.ip - faceforward(ray.dir, info.normal) * 0.000001;
 	newRay.dir = refr;
@@ -272,16 +301,12 @@ BumpTexture::~BumpTexture()
 
 void BumpTexture::modifyNormal(IntersectionInfo& info)
 {
-	int x = (int) floor(info.u * scaling * bitmap->getWidth());
-	int y = (int) floor(info.v * scaling * bitmap->getHeight());
-	// 0 <= x < bitmap.width
-	// 0 <= y < bitmap.height
-	x = (x % bitmap->getWidth());
-	y = (y % bitmap->getHeight());
+	float x = fmod(info.u * scaling * bitmap->getWidth(), bitmap->getWidth());
+	float y = fmod(info.v * scaling * bitmap->getHeight(), bitmap->getHeight());
 	if (x < 0) x += bitmap->getWidth();
 	if (y < 0) y += bitmap->getHeight();
 	
-	Color bump = bitmap->getPixel(x, y);
+	Color bump = bitmap->getFilteredPixel(x, y);
 	float dx = bump.r;
 	float dy = bump.g;
 	
@@ -297,9 +322,9 @@ void BumpTexture::beginRender()
 void Bumps::modifyNormal(IntersectionInfo& data)
 {
 	if (strength > 0) {
-		float freqX[3] = { 0.5, 1.21, 1.9 }, freqZ[3] = { 0.4, 1.13, 1.81 };
-		float fm = 0.2;
-		float intensityX[3] = { 0.1, 0.08, 0.05 }, intensityZ[3] = { 0.1, 0.08, 0.05 };
+		float freqX[3] = { 0.5f, 1.21f, 1.9f }, freqZ[3] = { 0.4f, 1.13f, 1.81f };
+		float fm = 0.2f;
+		float intensityX[3] = { 0.1f, 0.08f, 0.05f }, intensityZ[3] = { 0.1f, 0.08f, 0.05f };
 		double dx = 0, dy = 0;
 		for (int i = 0; i < 3; i++) {
 			dx += sin(fm * freqX[i] * data.u) * intensityX[i] * strength; 

@@ -31,6 +31,7 @@
 #include <sys/stat.h>
 
 #include <string>
+#include "util.h"
 using namespace std;
 
 string upCaseString(string s)

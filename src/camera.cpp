@@ -21,10 +21,15 @@
  * @File camera.cpp
  * @Brief Implementation of the raytracing camera.
  */
+#include <algorithm>
 #include "camera.h"
 #include "matrix.h"
 #include "util.h"
 #include "sdl.h"
+#include "geometry.h"
+#include "scene.h"
+#include "random_generator.h"
+using std::min;
 
 void Camera::beginFrame()
 {	
@@ -51,12 +56,29 @@ void Camera::beginFrame()
 	topRight *= rotation;
 	bottomLeft *= rotation;
 	
+	frontDir = Vector(0, 0, 1) * rotation;
+	upDir = Vector(0, 1, 0) * rotation;
+	rightDir = Vector(1, 0, 0) * rotation;
+	
 	topLeft += this->position;
 	topRight += this->position;
 	bottomLeft += this->position;
+	
+	if (autofocus) {
+		IntersectionInfo info;
+		double closest = 1e99;
+		Ray ray = getScreenRay(scene.settings.frameWidth / 2,
+								scene.settings.frameHeight / 2);
+		for (auto& node: scene.nodes) {
+			if (node->intersect(ray, info))
+				closest = min(closest, info.distance);
+		}
+		printf("Autofocus: found distance: %.2lf\n", closest);
+		focalPlaneDist = closest;
+	}
 }
 
-Ray Camera::getScreenRay(double xScreen, double yScreen)
+Ray Camera::getScreenRay(double xScreen, double yScreen, int whichCamera)
 {
 	Vector throughPoint = 
 		topLeft + (topRight - topLeft) * (xScreen / frameWidth())
@@ -66,5 +88,27 @@ Ray Camera::getScreenRay(double xScreen, double yScreen)
 	ray.dir = throughPoint - this->position;
 	ray.dir.normalize();
 	ray.start = this->position;
+	if (whichCamera != CAMERA_CENTRAL) {
+		ray.start += (whichCamera == CAMERA_RIGHT ? +1 : -1) * stereoSeparation * rightDir;
+	}
+	return ray;
+}
+
+Ray Camera::getDOFRay(double xScreen, double yScreen, int whichCamera)
+{
+	Ray ray = getScreenRay(xScreen, yScreen, whichCamera);
+	double cosTheta = dot(ray.dir, frontDir);
+	double M = focalPlaneDist / cosTheta;
+	Vector target = ray.start + ray.dir * M;
+	
+	double u, v;
+	Random& rnd = getRandomGen();
+	rnd.unitDiscSample(u, v);
+	u *= apertureSize;
+	v *= apertureSize;
+	
+	ray.start = ray.start + u * upDir + v * rightDir;
+	ray.dir = target - ray.start;
+	ray.dir.normalize();
 	return ray;
 }

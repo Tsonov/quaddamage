@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <algorithm>
+#include <numeric>
 #include <SDL/SDL.h>
 #include "mesh.h"
 #include "constants.h"
@@ -50,6 +51,9 @@ void Mesh::beginRender()
 		Uint32 endBuild = SDL_GetTicks();
 		printf(" -> KDTree built in %.2lfs, avg depth = %.1lf\n", (endBuild - startBuild) / 1000.0, maxDepthSum / double(numNodes));
 	}
+	
+	// if the object is set to be smooth-shaded, but it lacks normals, we have to revert it to "faceted":
+	if (normals.size() <= 1) faceted = true;
 }
 
 void Mesh::buildKD(KDTreeNode* node, BBox bbox, const vector<int>& triangleList, int depth)
@@ -150,7 +154,7 @@ bool intersectTriangleFast(const Ray& ray, const Vector& A, const Vector& B, con
 
 bool Mesh::intersectTriangle(const Ray& ray, const Triangle& t, IntersectionInfo& info)
 {
-	if (dot(ray.dir, t.gnormal) > 0) return false;
+	if (backfaceCulling && dot(ray.dir, t.gnormal) > 0) return false;
 	Vector A = vertices[t.v[0]];
 	Vector B = vertices[t.v[1]];
 	Vector C = vertices[t.v[2]];
