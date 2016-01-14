@@ -2,11 +2,14 @@
 
 // 1. First, some global settings
 GlobalSettings {
-	frameWidth          1024
-	frameHeight         768
+	frameWidth          640
+	frameHeight         480
 	ambientLight        (0.28, 0.30, 0.35)
 	maxTraceDepth		5
 	saturation			0.25
+	numThreads          0
+	wantAA				false
+	interactive			true
 }
 
 PointLight {
@@ -25,8 +28,8 @@ Camera camera {
 	roll          0.0
 	fov           90
 	aspectRatio   1.333
-	stereoSeparation 0.25 // comment this out to disable the stereoscopic effect
-	dof		on
+	//stereoSeparation 0.25 // comment this out to disable the stereoscopic effect
+	//dof		on
 	numSamples 100
 	fNumber 5.6
 	autofocus off
@@ -145,7 +148,7 @@ Refl ball_sfc {
 	glossiness 0.92
 	numSamples 10
 }
-
+/*
 Node ball1 {
 	geometry ball
 	shader ball_sfc
@@ -171,7 +174,7 @@ Node wineglass {
 	translate (126, 0, 80)
 	scale (17, 17, 17)
 }
-
+*/
 Node dice {
 	geometry   dice
 	shader     flat

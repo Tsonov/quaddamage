@@ -27,6 +27,19 @@
 #include "lights.h"
 #include "random_generator.h"
 
+Color BRDF::eval(const IntersectionInfo& x, const Vector& w_in, const Vector& w_out)
+{
+	return Color(1, 0, 0);
+}
+
+void BRDF::spawnRay(const IntersectionInfo& x, const Vector& w_in,
+						Ray& w_out, Color& color, float& pdf)
+{
+	w_out.dir = Vector(1, 0, 0);
+	color = Color(1, 0, 0);
+	pdf = -1;
+}
+
 bool visibilityCheck(const Vector& start, const Vector& end);
 
 Color CheckerTexture::sample(const IntersectionInfo& info)
@@ -73,6 +86,55 @@ Color Lambert::shade(const Ray& ray, const IntersectionInfo& info)
 	return result;
 	
 }
+
+Color Lambert::eval(const IntersectionInfo& x, const Vector& w_in, const Vector& w_out)
+{
+	Color diffuse = texture ? texture->sample(x) : this->color;
+	Vector N = faceforward(w_in, x.normal);
+	
+		  /*color*/  /*BRDF*/   /*Kajiya's cosine term*/
+	return diffuse * (1 / PI)     *   dot(w_out, N);
+}
+
+static Vector hemisphereSample(const Vector& normal)
+{
+	Random& rnd = getRandomGen();
+	
+	double u = rnd.randdouble();
+	double v = rnd.randdouble();
+	
+	double theta = 2 * PI * u;
+	double phi   = acos(2 * v - 1);
+	
+	Vector vec(
+		cos(theta) * sin(phi),
+		cos(phi),
+		sin(theta) * sin(phi)
+	);
+	
+	if (dot(vec, normal) < 0)
+		vec = -vec;
+		
+	return vec;
+}
+
+void Lambert::spawnRay(const IntersectionInfo& x, const Vector& w_in,
+						Ray& w_out, Color& out_color, float& pdf)
+{
+	out_color = texture ? texture->sample(x) : this->color;
+	Vector N = faceforward(w_in, x.normal);
+	
+	w_out.dir = hemisphereSample(N);
+	w_out.flags |= RF_DIFFUSE;
+	w_out.start = x.ip + N * 1e-6;
+	
+	/*color*/    /*BRDF*/   /*Kajiya's cos term*/
+	out_color *= (1 / PI) * dot(w_out.dir, N);
+	
+	// 1/2PI since the ray probability is spread over the entire hemisphere:
+	pdf = 1 / (2 * PI);
+}
+
 
 Color Phong::shade(const Ray& ray, const IntersectionInfo& info)
 {
@@ -137,7 +199,7 @@ Color BitmapTexture::sample(const IntersectionInfo& info)
 	return bitmap->getFilteredPixel(x, y);
 }
 
-extern Color raytrace(Ray ray);
+extern Color raytrace(const Ray& ray);
 
 Color Refl::shade(const Ray& ray, const IntersectionInfo& info)
 {
@@ -180,6 +242,26 @@ Color Refl::shade(const Ray& ray, const IntersectionInfo& info)
 	}
 }
 
+Color Refl::eval(const IntersectionInfo& x, const Vector& w_in, const Vector& w_out)
+{
+	return Color(0, 0, 0);
+}
+
+void Refl::spawnRay(const IntersectionInfo& x, const Vector& w_in,
+						Ray& w_out, Color& out_color, float& pdf)
+{
+	if (glossiness != 1)
+		return BRDF::spawnRay(x, w_in, w_out, out_color, pdf);
+
+	Vector n = faceforward(w_in, x.normal);
+
+	w_out.dir = reflect(w_in, n);
+	w_out.start = x.ip + n * 1e-6;
+	w_out.flags &= ~RF_DIFFUSE;
+	out_color = Color(1, 1, 1) * multiplier;
+	pdf = 1;
+}
+
 inline Vector refract(const Vector& i, const Vector& n, double ior)
 {
 	double NdotI = (double) (i * n);
@@ -207,6 +289,34 @@ Color Refr::shade(const Ray& ray, const IntersectionInfo& info)
 	newRay.depth++;
 	return raytrace(newRay) * multiplier;
 }
+
+Color Refr::eval(const IntersectionInfo& x, const Vector& w_in, const Vector& w_out)
+{
+	return Color(0, 0, 0);
+}
+
+void Refr::spawnRay(const IntersectionInfo& x, const Vector& w_in,
+						Ray& w_out, Color& out_color, float& pdf)
+{
+	Vector refr;
+	if (dot(w_in, x.normal) < 0) {
+		// entering the geometry
+		refr = refract(w_in, x.normal, 1 / ior);
+	} else {
+		// leaving the geometry
+		refr = refract(w_in, -x.normal, ior);
+	}
+	if (refr.lengthSqr() == 0) {
+		pdf = 0;
+		return;
+	}
+	w_out.dir = refr;
+	w_out.start = x.ip + w_out.dir * 1e-6;
+	w_out.flags &= ~RF_DIFFUSE;
+	out_color = Color(1, 1, 1) * multiplier;
+	pdf = 1;
+}
+
 
 void Layered::addLayer(Shader* shader, Color blend, Texture* tex)
 {
@@ -270,21 +380,23 @@ Color Layered::shade(const Ray& ray, const IntersectionInfo& info)
 	return result;
 }
 
-inline double fresnel(const Vector& i, const Vector& n, double ior)
+inline float fresnel(float NdotI, float ior)
 {
 	// Schlick's approximation
-	double f = sqr((1.0f - ior) / (1.0f + ior));
-	double NdotI = (double) -dot(n, i);
-	return f + (1.0f - f) * pow(1.0f - NdotI, 5.0f);
+	float f = sqr((1.0f - ior) / (1.0f + ior));
+	float x = 1.0f - NdotI;
+	return f + (1.0f - f) * (x * x * x * x * x);
 }
 
 Color Fresnel::sample(const IntersectionInfo& info)
 {
-	double eta = ior;
-	if (dot(info.normal, info.rayDir) > 0)
-		eta = 1 / eta;
-	Vector n = faceforward(info.rayDir, info.normal);
-	double fr = fresnel(info.rayDir, n, eta);
+	float eta = ior;
+	float NdotI = dot(info.normal, info.rayDir);
+	if (NdotI > 0)
+		eta = 1.0f / eta;
+	else
+		NdotI = -NdotI;
+	float fr = fresnel(NdotI, eta);
 	return Color(fr, fr, fr);
 }
 

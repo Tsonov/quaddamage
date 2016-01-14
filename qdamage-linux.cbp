@@ -47,12 +47,16 @@
 		<Unit filename="src/camera.h" />
 		<Unit filename="src/color.h" />
 		<Unit filename="src/constants.h" />
+		<Unit filename="src/cxxptl_sdl.cpp" />
+		<Unit filename="src/cxxptl_sdl.h" />
 		<Unit filename="src/environment.cpp" />
 		<Unit filename="src/environment.h" />
 		<Unit filename="src/geometry.cpp" />
 		<Unit filename="src/geometry.h" />
 		<Unit filename="src/heightfield.cpp" />
 		<Unit filename="src/heightfield.h" />
+		<Unit filename="src/lights.cpp" />
+		<Unit filename="src/lights.h" />
 		<Unit filename="src/main.cpp" />
 		<Unit filename="src/matrix.cpp" />
 		<Unit filename="src/matrix.h" />

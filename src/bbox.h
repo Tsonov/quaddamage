@@ -37,10 +37,24 @@ struct Triangle {
 	int n[3]; //!< holds indices to the three normals of the triangle (indexes in the `normals' array)
 	int t[3]; //!< holds indices to the three texture coordinates of the triangle (indexes in the `uvs' array)
 	Vector gnormal; //!< The geometric normal of the mesh (AB ^ AC, normalized)
+	Vector AB, AC, ABcrossAC; //!< precomputed AB, AC and AB^AC
 	Vector dNdx, dNdy;
 };
 // the C vertex of triangle with index 5 is:
 // mesh.vertices[mesh.triangles[5].v[2]];
+
+struct RRay: Ray {
+	// Ray with rdir; used for quicker intersection tests
+	Vector rdir;
+	RRay() {}
+	explicit RRay(const Ray& r): Ray(r) {}
+	void prepareForTracing()
+	{
+		rdir.x = fabs(dir.x) > 1e-12 ? 1.0 / dir.x : 1e12;
+		rdir.y = fabs(dir.y) > 1e-12 ? 1.0 / dir.y : 1e12;
+		rdir.z = fabs(dir.z) > 1e-12 ? 1.0 / dir.z : 1e12;
+	}
+};
 
 
 enum Axis {
@@ -84,13 +98,13 @@ struct BBox {
 	}
 	/// Test for ray-box intersection
 	/// @returns true if an intersection exists; false otherwise.
-	inline bool testIntersect(const Ray& ray) const
+	inline bool testIntersect(const RRay& ray) const
 	{
 		if (inside(ray.start)) return true;
 		for (int dim = 0; dim < 3; dim++) {
 			if ((ray.dir[dim] < 0 && ray.start[dim] < vmin[dim]) || (ray.dir[dim] > 0 && ray.start[dim] > vmax[dim])) continue;
 			if (fabs(ray.dir[dim]) < 1e-9) continue;
-			double mul = 1.0 / ray.dir[dim];
+			double mul = ray.rdir[dim];
 			int u = (dim == 0) ? 1 : 0;
 			int v = (dim == 2) ? 1 : 2;
 			double dist, x, y;
@@ -135,14 +149,14 @@ struct BBox {
 	/// returns the distance to the closest intersection of the ray and the BBox, or +INF if such an intersection doesn't exist.
 	/// please note that this is heavier than using just testIntersect() - testIntersect needs only to consider *ANY* intersection,
 	/// whereas closestIntersection() also needs to find the nearest one.
-	inline double closestIntersection(const Ray& ray) const
+	inline double closestIntersection(const RRay& ray) const
 	{
 		if (inside(ray.start)) return 0;
 		double minDist = INF;
 		for (int dim = 0; dim < 3; dim++) {
 			if ((ray.dir[dim] < 0 && ray.start[dim] < vmin[dim]) || (ray.dir[dim] > 0 && ray.start[dim] > vmax[dim])) continue;
 			if (fabs(ray.dir[dim]) < 1e-9) continue;
-			double mul = 1.0 / ray.dir[dim];
+			double mul = ray.rdir[dim];
 			double xs[2] = { vmin[dim], vmax[dim] };
 			int u = (dim == 0) ? 1 : 0;
 			int v = (dim == 2) ? 1 : 2;
@@ -164,14 +178,16 @@ struct BBox {
 	inline bool intersectTriangle(const Vector& A, const Vector& B, const Vector& C) const
 	{
 		if (inside(A) || inside(B) || inside(C)) return true;
-		Ray ray;
+		RRay ray;
 		Vector t[3] = { A, B, C };
 		for (int i = 0; i < 3; i++) for (int j = i + 1; j < 3; j++) {
 			ray.start = t[i];
 			ray.dir = t[j] - t[i];
+			ray.prepareForTracing();
 			if (testIntersect(ray)) {
 				ray.start = t[j];
 				ray.dir = t[i] - t[j];
+				ray.prepareForTracing();
 				if (testIntersect(ray)) return true;
 			}
 		}
@@ -187,6 +203,7 @@ struct BBox {
 				rayEnd[j] = vmax[j];
 				if (signOf(ray.start * ABcrossAC - D) != signOf(rayEnd * ABcrossAC - D)) {
 					ray.dir = rayEnd - ray.start;
+					ray.prepareForTracing();
 					double gamma = 1.0000001;
 					if (intersectTriangleFast(ray, A, B, C, gamma)) return true;
 				}
@@ -205,6 +222,26 @@ struct BBox {
 		right = *this;
 		left.vmax[axis] = where;
 		right.vmin[axis] = where;
+	}
+	/// Checks if a ray intersects a single wall inside the BBox
+	/// Consider the intersection of the splitting plane as described in split(), and the BBox
+	/// (i.e., the "split wall"). We want to check if the ray intersects that wall.
+	inline bool intersectWall(Axis axis, double where, const RRay& ray) const
+	{
+	   if (fabs(ray.dir[axis]) < 1e-9) return (fabs(ray.start[axis] - where) < 1e-9);
+	   int u = (axis == 0) ? 1 : 0;
+	   int v = (axis == 2) ? 1 : 2;
+	   double toGo = where - ray.start[axis];
+	   double rdirInAxis = ray.rdir[axis];
+	   // check if toGo and dirInAxis are of opposing signs:
+	   if ((toGo * rdirInAxis) < 0) return false;
+	   double d = toGo * rdirInAxis;
+	   double tu = ray.start[u] + ray.dir[u] * d;
+	   if (vmin[u] <= tu && tu <= vmax[u]) {
+		   double tv = ray.start[v] + ray.dir[v] * d;
+		   return (vmin[v] <= tv && tv <= vmax[v]);
+	   }
+	   return false;
 	}
 };
 

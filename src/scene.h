@@ -256,6 +256,10 @@ struct GlobalSettings: public SceneElement {
 	float saturation; 
 	
 	bool wantPrepass;            //!< Coarse resolution pre-pass required (defaults to true)
+	int numPaths;                //!< paths per pixel in path tracing
+	
+	int numThreads;              //!< # of threads for rendering; 0 = autodetect. 1 = single-threaded
+	bool interactive;            //!< interactive render
 		
 	GlobalSettings();
 	void fillProperties(ParsedBlock& pb);

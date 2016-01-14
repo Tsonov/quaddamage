@@ -52,6 +52,16 @@ void Mesh::beginRender()
 		printf(" -> KDTree built in %.2lfs, avg depth = %.1lf\n", (endBuild - startBuild) / 1000.0, maxDepthSum / double(numNodes));
 	}
 	
+	if (normals.size() <= 1 && autoSmooth) {
+		normals.resize(vertices.size(), Vector(0, 0, 0)); // extend the normals[] array, and fill with zeros
+		for (int i = 0; i < (int) triangles.size(); i++)
+			for (int j = 0; j < 3; j++) {
+				triangles[i].n[j] = triangles[i].v[j];
+				normals[triangles[i].n[j]] += triangles[i].gnormal;
+			}
+		for (int i = 1; i < (int) normals.size(); i++)
+			if (normals[i].lengthSqr() > 1e-9) normals[i].normalize();
+	}
 	// if the object is set to be smooth-shaded, but it lacks normals, we have to revert it to "faceted":
 	if (normals.size() <= 1) faceted = true;
 }
@@ -152,28 +162,29 @@ bool intersectTriangleFast(const Ray& ray, const Vector& A, const Vector& B, con
 	return true;
 }
 
-bool Mesh::intersectTriangle(const Ray& ray, const Triangle& t, IntersectionInfo& info)
+bool Mesh::intersectTriangle(const RRay& ray, const Triangle& t, IntersectionInfo& info)
 {
 	if (backfaceCulling && dot(ray.dir, t.gnormal) > 0) return false;
 	Vector A = vertices[t.v[0]];
-	Vector B = vertices[t.v[1]];
-	Vector C = vertices[t.v[2]];
 	
 	Vector H = ray.start - A;
 	Vector D = ray.dir;
 	
-	double Dcr = det(B-A, C-A, -D);
+	double Dcr = - (t.ABcrossAC * D);
 
 	if (fabs(Dcr) < 1e-12) return false;
 
-	double gamma = det(B-A, C-A, H) / Dcr;
+	double rDcr = 1 / Dcr;
+	double gamma = (t.ABcrossAC * H) * rDcr;
 	if (gamma < 0 || gamma > info.distance) return false;
 	
-	double lambda2 = det(H, C-A, -D) / Dcr;
-	double lambda3 = det(B-A, H, -D) / Dcr;
+	Vector HcrossD = H^D;
+	double lambda2 = (HcrossD * t.AC) * rDcr;
+	if (lambda2 < 0 || lambda2 > 1) return false;
 	
-	if (lambda2 < 0 || lambda3 < 0) return false;
-	if (lambda2 > 1 || lambda3 > 1) return false;
+	double lambda3 = -(t.AB * HcrossD) * rDcr;
+	if (lambda3 < 0 || lambda3 > 1) return false;
+	
 	if (lambda2 + lambda3 > 1) return false;
 		
 	info.distance = gamma;
@@ -204,7 +215,7 @@ bool Mesh::intersectTriangle(const Ray& ray, const Triangle& t, IntersectionInfo
 	return true;
 }
 
-bool Mesh::intersectKD(KDTreeNode* node, BBox bbox, const Ray& ray, IntersectionInfo& info)
+bool Mesh::intersectKD(KDTreeNode* node, const BBox& bbox, const RRay& ray, IntersectionInfo& info)
 {
 	if (node->axis == AXIS_NONE) {
 		bool found = false;
@@ -222,21 +233,32 @@ bool Mesh::intersectKD(KDTreeNode* node, BBox bbox, const Ray& ray, Intersection
 			std::swap(childOrder[0], childOrder[1]);
 		}
 		
-		for (int i = 0; i < 2; i++) {
-			const BBox& subBBox = childBBox[childOrder[i]];
-			if (subBBox.testIntersect(ray)) {
-				if (intersectKD(
-						&node->children[childOrder[i]], 
-						subBBox, ray, info))
-					return true;
-			}
+		BBox& firstBB = childBBox[childOrder[0]];
+		BBox& secondBB = childBBox[childOrder[1]];
+		KDTreeNode& firstChild = node->children[childOrder[0]];
+		KDTreeNode& secondChild = node->children[childOrder[1]];
+		// if the ray intersects the common wall between the two sub-boxes, then it invariably
+		// intersects both boxes (we can skip the testIntersect() checks):
+		// (see http://raytracing-bg.net/?q=node/68 )
+		if (bbox.intersectWall(node->axis, node->splitPos, ray)) {
+			if (intersectKD(&firstChild, firstBB, ray, info)) return true;
+			return intersectKD(&secondChild, secondBB, ray, info);
+		} else {
+			// if the wall isn't hit, then we intersect exclusively one of the sub-boxes;
+			// test one, if the test fails, then it's in the other:
+			if (firstBB.testIntersect(ray))
+				return intersectKD(&firstChild, firstBB, ray, info);
+			else
+				return intersectKD(&secondChild, secondBB, ray, info);
 		}
 		return false;
 	}
 }
 
-bool Mesh::intersect(const Ray& ray, IntersectionInfo& info)
+bool Mesh::intersect(const Ray& _ray, IntersectionInfo& info)
 {
+	RRay ray(_ray);
+	ray.prepareForTracing();
 	if (!bbox.testIntersect(ray))
 		return false;
 	
@@ -363,7 +385,9 @@ bool Mesh::loadFromOBJ(const char* filename)
 		Vector C = vertices[t.v[2]];
 		Vector AB = B - A;
 		Vector AC = C - A;
-		t.gnormal = AB ^ AC;
+		t.AB = AB;
+		t.AC = AC;
+		t.gnormal = t.ABcrossAC = AB ^ AC;
 		t.gnormal.normalize();
 		
 		// (1, 0) = px * texAB + qx * texAC; (1)

@@ -67,13 +67,14 @@ class Mesh: public Geometry {
 	
 	KDTreeNode* kdroot;
 	bool useKDTree;
+	bool autoSmooth;
 	int maxDepthSum;
 	int numNodes;
 
 	void computeBoundingGeometry();
-	bool intersectTriangle(const Ray& ray, const Triangle& t, IntersectionInfo& info);
+	bool intersectTriangle(const RRay& ray, const Triangle& t, IntersectionInfo& info);
 	void buildKD(KDTreeNode* node, BBox bbox, const std::vector<int>& triangleList, int depth);
-	bool intersectKD(KDTreeNode* node, BBox bbox, const Ray& ray, IntersectionInfo& info);
+	bool intersectKD(KDTreeNode* node, const BBox& bbox, const RRay& ray, IntersectionInfo& info);
 public:
 	
 	bool faceted;
@@ -83,6 +84,7 @@ public:
 		faceted = false;
 		useKDTree = true;
 		backfaceCulling = true;
+		autoSmooth = false;
 		kdroot = NULL;
 	}
 	~Mesh();
@@ -103,6 +105,7 @@ public:
 			pb.requiredProp("file");
 		}
 		pb.getBoolProp("useKDTree", &useKDTree);
+		pb.getBoolProp("autoSmooth", &autoSmooth);
 	}
 	
 	void beginRender();
